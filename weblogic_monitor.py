@@ -14,13 +14,22 @@ import os
 import socket
 
 # Load .env file if present (for local credentials)
-_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+_script_dir = (os.environ.get('WL_SCRIPT_DIR') or '').strip() or os.getcwd()
+if not _script_dir:
+    try:
+        _script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        try:
+            _script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        except Exception:
+            _script_dir = os.getcwd()
+_env_path = os.path.join(_script_dir, '.env')
 if os.path.isfile(_env_path):
     for _line in open(_env_path):
         _line = _line.strip()
         if _line and not _line.startswith('#') and '=' in _line:
             _k, _v = _line.split('=', 1)
-            os.environ.setdefault(_k.strip(), _v.strip())
+            os.environ[_k.strip()] = _v.strip()
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION - set via environment variables or edit defaults below
@@ -326,23 +335,27 @@ def send_email(html_body, subject=None):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Daemon loop
 # ---------------------------------------------------------------------------
-def main():
+INTERVAL_SECONDS = 7200  # 2 hours
+
+def run_once():
     from time import strftime as fmt_time
+    now = fmt_time('%Y-%m-%d %H:%M:%S')
     hostname = socket.gethostname()
+    print ''
     print '=' * 60
     print ' WebLogic Health Monitor'
     print ' Target : %s' % ADMIN_URL
     print ' Host   : %s' % hostname
-    print ' Time   : %s' % fmt_time('%Y-%m-%d %H:%M:%S')
+    print ' Time   : %s' % now
     print '=' * 60
 
     metrics = collect_metrics()
 
     if not metrics:
         print 'ERROR: No server metrics collected.'
-        sys.exit(1)
+        return
 
     print ''
     print '%-24s %-12s %-10s %s' % ('Server', 'State', 'Health', 'FreeHeap%')
@@ -358,7 +371,6 @@ def main():
 
     html = build_html(metrics, hostname)
 
-    # Always save a local copy
     report_dir = os.environ.get('TEMP', '/tmp')
     report_path = os.path.join(report_dir, 'weblogic_report_%s.html' % fmt_time('%Y%m%d_%H%M'))
     try:
@@ -371,9 +383,27 @@ def main():
 
     send_email(html)
 
+    print '[%s] Done.' % now
+
+
+if len(sys.argv) > 1 and sys.argv[1] == '--once':
+    run_once()
+else:
+    from time import strftime as fmt_time, sleep as _sleep
+
+    print 'WebLogic Health Monitor - Daemon Mode'
+    print 'Interval: every %d seconds (%d hours)' % (INTERVAL_SECONDS, INTERVAL_SECONDS / 3600)
+    print 'Press Ctrl+C to stop.'
     print ''
-    print 'Done.'
 
-
-main()
-#
+    try:
+        while True:
+            run_once()
+            next_run = fmt_time('%Y-%m-%d %H:%M:%S')
+            print ''
+            print 'Next check at %s (waiting %d minutes)...' % (next_run, INTERVAL_SECONDS / 60)
+            print 'Press Ctrl+C to stop.'
+            _sleep(INTERVAL_SECONDS)
+    except KeyboardInterrupt:
+        print ''
+        print 'Stopped by user.'

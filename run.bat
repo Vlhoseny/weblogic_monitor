@@ -69,6 +69,7 @@ if not exist ".env" (
 
 REM --- Run ----------------------------------------------------------
 set USER_MEM_ARGS=-Xms256m -Xmx1024m
+set WL_SCRIPT_DIR=%~dp0
 echo [OK] Starting WLST ...
 echo.
 
