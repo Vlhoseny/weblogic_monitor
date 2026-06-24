@@ -4,11 +4,9 @@
 # Collects server state, health, and JVM metrics from a local WebLogic domain
 # and emails an HTML dashboard report.
 #
-# Usage (Linux):   . <MW_HOME>/wlserver/server/bin/setWLSEnv.sh
-#                  java weblogic.WLST weblogic_monitor.py
-#
-# Usage (Windows): <MW_HOME>\wlserver\server\bin\setWLSEnv.cmd
-#                  java weblogic.WLST C:\path\to\weblogic_monitor.py
+# Quick start:
+#   1. Copy .env.example to .env and fill in your credentials
+#   2. Double-click run.bat  (or run: wlst.cmd weblogic_monitor.py)
 # =============================================================================
 
 import sys
@@ -40,6 +38,33 @@ SMTP_USE_TLS   = os.environ.get('WL_SMTP_USE_TLS',  'true').lower() == 'true'
 
 EMAIL_FROM     = os.environ.get('WL_EMAIL_FROM',    '')
 EMAIL_TO       = os.environ.get('WL_EMAIL_TO',      '').split(',')
+
+# ---------------------------------------------------------------------------
+# Validate required config
+# ---------------------------------------------------------------------------
+_missing = []
+if not ADMIN_PASS:
+    _missing.append('WL_ADMIN_PASS')
+if not SMTP_USER:
+    _missing.append('WL_SMTP_USER')
+if not SMTP_PASS:
+    _missing.append('WL_SMTP_PASS')
+if not EMAIL_FROM:
+    _missing.append('WL_EMAIL_FROM')
+if not EMAIL_TO or EMAIL_TO == ['']:
+    _missing.append('WL_EMAIL_TO')
+if _missing:
+    print '=' * 60
+    print ' MISSING CONFIGURATION'
+    print '=' * 60
+    for v in _missing:
+        print '   - %s' % v
+    print
+    print ' Create/edit the .env file in this directory:'
+    print '   copy .env.example .env'
+    print '   notepad .env'
+    print
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # HealthState constants (weblogic.health.HealthState)
@@ -253,8 +278,8 @@ def send_email(html_body, subject=None):
     """Send the HTML report via SMTP using javax.mail (Jython-safe)."""
     from time import strftime as fmt_time
 
-    if SMTP_HOST == 'smtp.example.com':
-        print 'WARN: SMTP not configured - skipping email.'
+    if not SMTP_USER or not SMTP_PASS:
+        print 'WARN: SMTP not configured - skipping email. Set WL_SMTP_USER and WL_SMTP_PASS in .env'
         return False
 
     if subject is None:
@@ -351,50 +376,4 @@ def main():
 
 
 main()
-
-
-# =============================================================================
-# EXECUTION INSTRUCTIONS
-# =============================================================================
-#
-# --- Windows ---
-#
-# 1. Open a Command Prompt (cmd.exe) - do NOT use PowerShell
-#
-# 2. Run setWLSEnv.cmd to set up the WebLogic environment:
-#       C:\Oracle\Middleware\wlserver\server\bin\setWLSEnv.cmd
-#
-# 3. Execute the script:
-#       java weblogic.WLST C:\path\to\weblogic_monitor.py
-#
-# 4. To schedule every hour via Windows Task Scheduler:
-#
-#    a) Create a batch file, e.g. C:\scripts\run_wlst_monitor.bat:
-#    -----
-#    @echo off
-#    call C:\Oracle\Middleware\wlserver\server\bin\setWLSEnv.cmd
-#    java weblogic.WLST C:\scripts\weblogic_monitor.py >> C:\logs\wlst_monitor.log 2>&1
-#    -----
-#
-#    b) Register the scheduled task (run as Administrator):
-#    -----
-#    schtasks /CREATE /SC HOURLY /TN "WebLogicHealthMonitor" ^
-#             /TR "C:\scripts\run_wlst_monitor.bat" ^
-#             /ST 00:00 /RU SYSTEM /RL HIGHEST
-#    -----
-#
-#    c) To verify:
-#       schtasks /QUERY /TN "WebLogicHealthMonitor"
-#
-#    d) To delete:
-#       schtasks /DELETE /TN "WebLogicHealthMonitor" /F
-#
-# --- Linux ---
-#
-# 1. Source the environment and run:
-#       . /u01/app/oracle/middleware/wlserver/server/bin/setWLSEnv.sh
-#       java weblogic.WLST /path/to/weblogic_monitor.py
-#
-# 2. Crontab entry (every hour):
-#       0 * * * * . /u01/app/oracle/middleware/wlserver/server/bin/setWLSEnv.sh && java weblogic.WLST /path/to/weblogic_monitor.py >> /var/log/wlst_monitor.log 2>&1
 #
