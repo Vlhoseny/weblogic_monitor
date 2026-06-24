@@ -15,23 +15,31 @@ import sys
 import os
 import socket
 
+# Load .env file if present (for local credentials)
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+if os.path.isfile(_env_path):
+    for _line in open(_env_path):
+        _line = _line.strip()
+        if _line and not _line.startswith('#') and '=' in _line:
+            _k, _v = _line.split('=', 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 # ---------------------------------------------------------------------------
-# CONFIGURATION - Edit these before running
+# CONFIGURATION - set via environment variables or edit defaults below
 # ---------------------------------------------------------------------------
 
-ADMIN_URL      = 't3://127.0.0.1:7101'
-ADMIN_USER     = 'weblogic'
-ADMIN_PASS     = 'weblogic1'                    # or use userconfig file
+ADMIN_URL      = os.environ.get('WL_ADMIN_URL',     't3://127.0.0.1:7101')
+ADMIN_USER     = os.environ.get('WL_ADMIN_USER',    'weblogic')
+ADMIN_PASS     = os.environ.get('WL_ADMIN_PASS',    '')
 
-# SMTP settings (Gmail)
-SMTP_HOST      = 'smtp.gmail.com'
-SMTP_PORT      = 587
-SMTP_USER      = 'mohamedabdulrahim4work@gmail.com'
-SMTP_PASS      = 'mqyc ssie wycb mevo'
-SMTP_USE_TLS   = True
+SMTP_HOST      = os.environ.get('WL_SMTP_HOST',     'smtp.gmail.com')
+SMTP_PORT      = int(os.environ.get('WL_SMTP_PORT', '587'))
+SMTP_USER      = os.environ.get('WL_SMTP_USER',     '')
+SMTP_PASS      = os.environ.get('WL_SMTP_PASS',     '')
+SMTP_USE_TLS   = os.environ.get('WL_SMTP_USE_TLS',  'true').lower() == 'true'
 
-EMAIL_FROM     = 'mohamedabdulrahim4work@gmail.com'
-EMAIL_TO       = ['alhosenyabdulrahhim99@gmail.com']
+EMAIL_FROM     = os.environ.get('WL_EMAIL_FROM',    '')
+EMAIL_TO       = os.environ.get('WL_EMAIL_TO',      '').split(',')
 
 # ---------------------------------------------------------------------------
 # HealthState constants (weblogic.health.HealthState)
