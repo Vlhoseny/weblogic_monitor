@@ -68,7 +68,7 @@ On first run, WLST will show:
 ```
 WebLogic Health Monitor
  Target : t3://127.0.0.1:7101
- Host   : 0xVSTVDEV
+ Host   : 0x
  Time   : 2026-06-25 00:43:47
 ============================================================
 Server                   State        Health     FreeHeap%
@@ -76,7 +76,7 @@ Server                   State        Health     FreeHeap%
 DefaultServer            RUNNING      OK         16.4%
 ------------------------------------------------------------
 OK: Report saved to C:\Users\...\weblogic_report_*.html
-OK: Email sent to alhosenyabdulrahhim99@gmail.com
+OK: Email sent to YOUR-EMAIL@mail.com
 ```
 
 ## Scheduling (Optional)
