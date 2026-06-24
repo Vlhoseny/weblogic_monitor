@@ -1,6 +1,0 @@
-# Secrets
-.env
-
-# Temp
-*.pyc
-weblogic_report_*.html
