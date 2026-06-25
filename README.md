@@ -1,49 +1,77 @@
 # WebLogic Health Monitor
 
-Get a daily email with your WebLogic server health — state, JVM heap, and status.
+WLST-based daemon that collects full WebLogic domain health (servers, deployments, datasources, clusters, Node Manager) and emails a dark-themed HTML dashboard every N hours.
 
 ---
 
-## How to Run (3 minutes)
-
-### 1. Download
+## Quick Start
 
 ```cmd
 git clone https://github.com/Vlhoseny/weblogic_monitor.git
-cd weblogic_monitor
-```
-
-### 2. Set up your credentials
-
-```cmd
+cd weblogic-monitor
 copy .env.example .env
-notepad .env
 ```
 
-Fill in these 5 values:
+Edit `.env` with your credentials:
 
 | Variable | What to put |
 |----------|-------------|
-| `WL_ADMIN_PASS` | Your WebLogic `weblogic` user password |
-| `WL_SMTP_USER` | Your Gmail address (e.g. `you@gmail.com`) |
-| `WL_SMTP_PASS` | A Gmail **App Password** (16 chars) — [get one here](https://support.google.com/accounts/answer/185833) |
-| `WL_EMAIL_FROM` | Same as `WL_SMTP_USER` |
-| `WL_EMAIL_TO` | Who gets the email (e.g. `you@gmail.com`) |
+| `WL_ADMIN_URL` | `t3://localhost:7101` (or your Admin Server) |
+| `WL_ADMIN_USER` | WebLogic admin username (`weblogic`) |
+| `WL_ADMIN_PASS` | WebLogic admin password |
+| `WL_SMTP_USER` | Gmail address for sending |
+| `WL_SMTP_PASS` | Gmail App Password (16 chars) — [create one](https://support.google.com/accounts/answer/185833) |
+| `WL_EMAIL_FROM` | Sender address (same as `WL_SMTP_USER`) |
+| `WL_EMAIL_TO` | Recipient address |
 
-> **What's an App Password?** Google requires it instead of your regular password.
-> Go to https://myaccount.google.com/apppasswords, create one for "Mail" on "Windows Computer", copy the 16-character code.
+Then:
 
-### 3. Run
+```cmd
+run.bat
+```
 
-**Double-click** `run.bat` — it finds WebLogic automatically and runs the script.
+The script runs forever, checking every 2 hours. Press **Ctrl+C** to stop.
 
-That's it. You'll see server status in the console and get an email.
+For a single run: `run.bat --once`
 
----
+## Daemon Mode
 
-## What If run.bat Can't Find WebLogic?
+The script runs in a loop by default. Each cycle:
 
-Set your `MW_HOME` environment variable:
+1. Connects to the Admin Server
+2. Collects domain info, server states + JVM heap, deployments, datasources, clusters
+3. Checks Node Manager reachability
+4. Generates a dark HTML report
+5. Emails it via SMTP (Gmail)
+6. Sleeps for the configured interval (default 2 hours)
+
+Control:
+
+| Command | Behavior |
+|---------|----------|
+| `run.bat` | Daemon mode (loops every 2h) |
+| `run.bat --once` | Single run, then exit |
+| `run.bat --interval 3600` | Check every 3600s (1h) |
+| Ctrl+C | Stop gracefully |
+
+Environment variable `WL_CHECK_INTERVAL` sets the default interval (seconds). Default: 7200.
+
+## How It Works
+
+The script (`weblogic_monitor.py`) uses WebLogic Scripting Tool (WLST) to:
+
+- **Domain** — name, version
+- **Servers** — state (RUNNING/SHUTDOWN/FAILED), health (OK/FAILED/WARNING), heap free %
+- **Deployments** — application list from domain config
+- **Datasources** — name, max capacity
+- **Clusters** — cluster membership
+- **Node Manager** — reachability via SSL then plain
+
+Results are compiled into a dark-themed HTML table and sent via `javax.mail` (Jython-compatible).
+
+## If run.bat Can't Find WebLogic
+
+Set `MW_HOME`:
 
 ```cmd
 set MW_HOME=C:\Oracle\Middleware\Oracle_Home
@@ -54,48 +82,22 @@ Or run manually:
 
 ```cmd
 set USER_MEM_ARGS=-Xms256m -Xmx1024m
-"C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin\wlst.cmd" weblogic_monitor.py
+set WL_SCRIPT_DIR=C:\path\to\weblogic-monitor
+"C:\Oracle\Middleware\Oracle_Home\oracle_common\common\bin\wlst.cmd" weblogic_monitor.py --once
 ```
-
----
-
-```
-WebLogic Health Monitor
- Target : t3://127.0.0.1:7101
- Host   : 0xVSTVDEV
- Time   : 2026-06-25 00:43:47
-============================================================
-Server                   State        Health     FreeHeap%
-------------------------------------------------------------
-DefaultServer            RUNNING      OK         16.4%
-------------------------------------------------------------
-OK: Report saved to C:\Users\...\weblogic_report_*.html
-OK: Email sent to you@example.com
-```
-
-## Schedule Daily Emails (Task Scheduler)
-
-1. Open **Task Scheduler** → **Create Basic Task**
-2. Trigger: **Daily** at 8:00 AM
-3. Action: **Start a program**
-   - Program: `C:\Windows\System32\cmd.exe`
-   - Arguments: `/c "C:\path\to\weblogic-monitor\run.bat"`
-
----
 
 ## Project Files
 
 | File | What it is |
 |------|-----------|
 | `weblogic_monitor.py` | The monitoring script |
-| `run.bat` | One-click launcher (auto-finds WebLogic) |
+| `run.bat` | One-click launcher (auto-finds WLST) |
 | `.env` | Your credentials (**do not share**) |
 | `.env.example` | Template for `.env` |
 
----
-
 ## Security
 
-- `.env` is in `.gitignore` — your passwords **stay on your machine**
-- The script reads secrets from `.env` or environment variables, not from the code
-- For production, use WebLogic's `UserConfigFile` instead of plaintext passwords
+- `.env` is in `.gitignore` — credentials never committed
+- Script reads secrets from `.env` or environment variables only
+- Gmail App Password required (revocable, scoped to Mail)
+- For production, consider WebLogic `UserConfigFile` instead

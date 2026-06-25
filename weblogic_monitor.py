@@ -1,28 +1,8 @@
-# =============================================================================
-# WebLogic Health Monitor - WLST/Jython 2.7 Script
-# =============================================================================
-# Collects server state, health, and JVM metrics from a local WebLogic domain
-# and emails an HTML dashboard report.
-#
-# Quick start:
-#   1. Copy .env.example to .env and fill in your credentials
-#   2. Double-click run.bat  (or run: wlst.cmd weblogic_monitor.py)
-# =============================================================================
-
 import sys
 import os
 import socket
 
-# Load .env file if present (for local credentials)
 _script_dir = (os.environ.get('WL_SCRIPT_DIR') or '').strip() or os.getcwd()
-if not _script_dir:
-    try:
-        _script_dir = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        try:
-            _script_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        except Exception:
-            _script_dir = os.getcwd()
 _env_path = os.path.join(_script_dir, '.env')
 if os.path.isfile(_env_path):
     for _line in open(_env_path):
@@ -30,10 +10,6 @@ if os.path.isfile(_env_path):
         if _line and not _line.startswith('#') and '=' in _line:
             _k, _v = _line.split('=', 1)
             os.environ[_k.strip()] = _v.strip()
-
-# ---------------------------------------------------------------------------
-# CONFIGURATION - set via environment variables or edit defaults below
-# ---------------------------------------------------------------------------
 
 ADMIN_URL      = os.environ.get('WL_ADMIN_URL',     't3://127.0.0.1:7101')
 ADMIN_USER     = os.environ.get('WL_ADMIN_USER',    'weblogic')
@@ -48,9 +24,8 @@ SMTP_USE_TLS   = os.environ.get('WL_SMTP_USE_TLS',  'true').lower() == 'true'
 EMAIL_FROM     = os.environ.get('WL_EMAIL_FROM',    '')
 EMAIL_TO       = os.environ.get('WL_EMAIL_TO',      '').split(',')
 
-# ---------------------------------------------------------------------------
-# Validate required config
-# ---------------------------------------------------------------------------
+CHECK_INTERVAL = int(os.environ.get('WL_CHECK_INTERVAL', '7200'))
+
 _missing = []
 if not ADMIN_PASS:
     _missing.append('WL_ADMIN_PASS')
@@ -75,9 +50,6 @@ if _missing:
     print
     sys.exit(1)
 
-# ---------------------------------------------------------------------------
-# HealthState constants (weblogic.health.HealthState)
-# ---------------------------------------------------------------------------
 HEALTH_MAP = {
     0: ('OK',       '#2ecc71'),
     1: ('WARN',     '#f1c40f'),
@@ -86,213 +58,349 @@ HEALTH_MAP = {
     4: ('OVERLOAD', '#e67e22'),
 }
 
+STATE_COLORS = {
+    'running': '#2ecc71', 'shutdown': '#7f8c8d',
+    'failed': '#e74c3c', 'admin': '#e67e22',
+}
+
+def badge(text, bg):
+    return ('<span style="display:inline-block;padding:3px 10px;'
+        'border-radius:10px;font-size:12px;font-weight:700;'
+        'color:#fff;background:' + bg + '">' + text + '</span>')
 
 def get_health_label(state_code):
-    """Return (label, color) for a health state integer."""
     return HEALTH_MAP.get(state_code, ('UNKNOWN', '#95a5a6'))
 
+def sf(fmt='%Y-%m-%d %H:%M:%S'):
+    from time import strftime as _f
+    return _f(fmt)
 
-def collect_metrics():
-    """Connect to the Admin Server and collect metrics from every server."""
+def section(title):
+    print ''
+    print '--- ' + title + ' ' + ('-' * max(50 - len(title), 4))
+
+# ---------------------------------------------------------------------------
+# Collectors
+# ---------------------------------------------------------------------------
+
+def soft(fn, fallback=None):
+    try:
+        return fn()
+    except Exception:
+        return fallback
+
+def collect_domain_info():
+    name = 'Unknown'
+    version = 'N/A'
+    try:
+        cd('/')
+        name = str(cmo.getName())
+    except Exception:
+        pass
+    try:
+        from java.lang import System
+        v = System.getProperty('weblogic.version')
+        if v:
+            version = str(v)
+    except Exception:
+        pass
+    return {'name': name, 'version': version}
+
+def collect_servers():
     results = []
     try:
-        connect(ADMIN_USER, ADMIN_PASS, ADMIN_URL)
-    except Exception, e:
-        print 'ERROR: Failed to connect to %s - %s' % (ADMIN_URL, str(e))
-        sys.exit(1)
-
-    domainRuntime()
-
-    # Get server names by navigating the runtime tree
-    serverNames = []
-    try:
         cd('/ServerRuntimes')
-        serverNames = ls(returnMap='true')
-    except Exception, e:
-        print 'ERROR: Cannot list server runtimes - %s' % str(e)
-        disconnect()
-        sys.exit(1)
-
-    if not serverNames:
-        print 'WARN: No server runtimes found.'
-        disconnect()
+        names = ls(returnMap='true')
+    except Exception:
         return results
-
-    for name in serverNames:
-        state = 'UNKNOWN'
-        health_code = -1
-        heap_free_pct = -1.0
-
-        # Server state and health
+    for name in names:
+        s = {'name': name, 'state': 'UNKNOWN', 'health_label': 'UNKNOWN',
+             'health_color': '#95a5a6', 'heap_free_pct': -1.0}
         try:
             cd('/ServerRuntimes/' + name)
-            state = cmo.getState()
+            s['state'] = cmo.getState()
         except Exception:
             pass
-
         try:
             hs = cmo.getHealthState()
             if hs:
-                health_code = hs.getState()
+                s['health_label'], s['health_color'] = get_health_label(hs.getState())
         except Exception:
             pass
-
-        health_label, health_color = get_health_label(health_code)
-
-        # JVM heap (JVMRuntime is under the server runtime in domainRuntime tree)
         try:
             cd('/ServerRuntimes/' + name + '/JVMRuntime/' + name)
             free  = cmo.getHeapFreeCurrent()
             total = cmo.getHeapSizeCurrent()
             if total > 0:
-                heap_free_pct = round((float(free) / total) * 100, 1)
+                s['heap_free_pct'] = round((float(free) / total) * 100, 1)
         except Exception:
             pass
-
-        results.append({
-            'name':          name,
-            'state':         state,
-            'health_label':  health_label,
-            'health_color':  health_color,
-            'heap_free_pct': heap_free_pct,
-        })
-
-    disconnect()
+        results.append(s)
     return results
 
+def collect_deployments():
+    results = []
+    try:
+        domainConfig()
+        cd('/AppDeployments')
+        apps = ls(returnMap='true')
+    except Exception:
+        return results
+    for name in apps:
+        results.append({'name': name, 'state': 'configured'})
+    if len(apps) == 0:
+        domainRuntime()
+        try:
+            cd('/AppRuntimeStateRuntime/AppRuntimeStateRuntime')
+            states = ls(returnMap='true')
+            for appName in states:
+                pass
+        except Exception:
+            pass
+    return results
 
-def build_html(metrics, hostname):
-    """Generate a dark-theme HTML dashboard."""
-    from time import strftime as fmt_time
-    now = fmt_time('%Y-%m-%d %H:%M:%S')
+def collect_datasources():
+    results = []
+    try:
+        domainConfig()
+        cd('/JDBCSystemResources')
+        names = ls(returnMap='true')
+    except Exception:
+        return results
+    for name in names:
+        r = {'name': name, 'state': 'configured', 'max': -1}
+        try:
+            cd('/JDBCSystemResources/' + name + '/JDBCResource/' + name
+               + '/JDBCConnectionPoolParams/' + name)
+            r['max'] = int(cmo.getMaxCapacity())
+        except Exception:
+            pass
+        results.append(r)
+    return results
 
-    rows = ''
-    for m in metrics:
-        state_name = m['state'].lower()
-        state_badge = ('<span class="badge state-'
-            + state_name + '">' + m['state'] + '</span>')
+def collect_clusters():
+    results = []
+    try:
+        domainConfig()
+        cd('/Clusters')
+        names = ls(returnMap='true')
+    except Exception:
+        return results
+    for name in names:
+        results.append({'name': name})
+    return results
 
-        health_badge = ('<span class="badge" style="background:'
-            + m['health_color'] + '">' + m['health_label'] + '</span>')
+def check_nm():
+    try:
+        nmConnect(username=ADMIN_USER, password=ADMIN_PASS,
+                  host='localhost', port='5556',
+                  domainName='', domainDir='', nmType='ssl')
+        nmDisconnect()
+        return 'Running'
+    except Exception:
+        pass
+    try:
+        nmConnect(username=ADMIN_USER, password=ADMIN_PASS,
+                  host='localhost', port='5556',
+                  domainName='', domainDir='', nmType='plain')
+        nmDisconnect()
+        return 'Running'
+    except Exception:
+        pass
+    return 'Not reachable'
 
-        if m['heap_free_pct'] < 0:
-            heap_cell = '<span class="muted">N/A</span>'
-        elif m['heap_free_pct'] < 20:
-            heap_cell = ('<span class="badge state-critical">'
-                + str(round(m['heap_free_pct'], 1)) + '</span>')
-        elif m['heap_free_pct'] < 40:
-            heap_cell = ('<span class="badge" style="background:#f1c40f">'
-                + str(round(m['heap_free_pct'], 1)) + '</span>')
+def collect_domain_health():
+    d = {}
+
+    connect(ADMIN_USER, ADMIN_PASS, ADMIN_URL)
+
+    section('Domain Info')
+    d['domain'] = collect_domain_info()
+    print '  Name: %s   Version: %s' % (d['domain']['name'], d['domain']['version'])
+
+    domainRuntime()
+    section('Servers')
+    d['servers'] = collect_servers()
+    up = len([1 for s in d['servers'] if s['state'] == 'RUNNING'])
+    print '  %d/%d running' % (up, len(d['servers']))
+    for s in d['servers']:
+        if s['heap_free_pct'] >= 0:
+            hp = ' (%.1f%% heap)' % s['heap_free_pct']
         else:
-            heap_cell = ('<span class="badge" style="background:#2ecc71">'
-                + str(round(m['heap_free_pct'], 1)) + '</span>')
+            hp = ''
+        print '    %-24s %-10s %s%s' % (s['name'], s['state'], s['health_label'], hp)
 
-        rows += ('<tr>'
-            '<td>' + m['name'] + '</td>'
-            '<td>' + state_badge + '</td>'
-            '<td>' + health_badge + '</td>'
-            '<td>' + heap_cell + '</td>'
-            '</tr>')
+    section('Deployments')
+    d['deployments'] = collect_deployments()
+    print '  %d found' % len(d['deployments'])
+    for a in d['deployments']:
+        print '    %-30s %s' % (a['name'], a['state'])
 
-    html = ('''<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebLogic Health Monitor</title>
-<style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    background: #1a1d23;
-    color: #e4e7eb;
-    padding: 40px 20px;
-  }
-  .container { max-width: 960px; margin: 0 auto; }
-  .header {
-    display: flex; justify-content: space-between; align-items: center;
-    margin-bottom: 32px; padding-bottom: 16px;
-    border-bottom: 1px solid #2d3139;
-  }
-  .header h1 {
-    font-size: 22px; font-weight: 600;
-    background: linear-gradient(135deg, #6366f1, #8b5cf6);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-  }
-  .header .meta { font-size: 13px; color: #9ca3af; text-align: right; }
-  .header .meta span { display: block; }
-  .header .meta .host { color: #e4e7eb; font-weight: 500; }
-  table {
-    width: 100%; border-collapse: collapse;
-    background: #22262e; border-radius: 12px; overflow: hidden;
-  }
-  th {
-    background: #2d3139; color: #9ca3af; font-size: 11px;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 14px 18px; text-align: left; font-weight: 600;
-  }
-  td {
-    padding: 14px 18px; font-size: 14px; border-top: 1px solid #2d3139;
-  }
-  tr:hover td { background: #2a2e37; }
-  .badge {
-    display: inline-block; padding: 3px 12px; border-radius: 12px;
-    font-size: 12px; font-weight: 600; color: #fff;
-  }
-  .badge.state-running    { background: #2ecc71; }
-  .badge.state-shutdown   { background: #7f8c8d; }
-  .badge.state-failed     { background: #e74c3c; }
-  .badge.state-critical   { background: #e74c3c; }
-  .badge.state-admin      { background: #e67e22; }
-  .badge.state-unknown    { background: #95a5a6; }
-  .muted { color: #6b7280; font-style: italic; }
-  .footer {
-    text-align: center; margin-top: 24px; font-size: 12px; color: #6b7280;
-  }
-</style>
-</head>
-<body>
-<div class="container">
-  <div class="header">
-      <h1>WebLogic Health Monitor</h1>
-    <div class="meta">
-      <span class="host">''' + hostname + '''</span>
-      <span>''' + now + '''</span>
-    </div>
-  </div>
-  <table>
-    <thead>
-      <tr>
-        <th>Server</th>
-        <th>State</th>
-        <th>Health</th>
-        <th>Free Heap</th>
-      </tr>
-    </thead>
-    <tbody>
-      ''' + rows + '''
-    </tbody>
-  </table>
-  <div class="footer">
-    Generated by WLST - WebLogic Health Monitor
-  </div>
-</div>
-</body>
-</html>''')
+    section('Datasources')
+    d['datasources'] = collect_datasources()
+    print '  %d found' % len(d['datasources'])
+    for ds in d['datasources']:
+        if ds['max'] > 0:
+            cap = ', max: %d' % ds['max']
+        else:
+            cap = ''
+        print '    %-30s %s%s' % (ds['name'], ds['state'], cap)
 
-    return html
+    section('Clusters')
+    d['clusters'] = collect_clusters()
+    print '  %d found' % len(d['clusters'])
+    for c in d['clusters']:
+        print '    %s' % c['name']
 
+    disconnect()
+
+    section('Node Manager')
+    d['nm'] = check_nm()
+    print '  %s' % d['nm']
+
+    return d
+
+# ---------------------------------------------------------------------------
+# HTML report
+# ---------------------------------------------------------------------------
+
+def build_html_report(data, hostname):
+    now = sf()
+    rows = []
+
+    def td(cells):
+        parts = []
+        for c in cells:
+            parts.append('<td style="padding:10px 14px;font-size:13px;'
+                        'border-top:1px solid #2d3139;color:#e4e7eb">'
+                        + c + '</td>')
+        return '<tr>' + ''.join(parts) + '</tr>\n'
+
+    def th(cells):
+        parts = []
+        for c in cells:
+            parts.append('<th style="padding:10px 14px;font-size:11px;font-weight:700;'
+                        'color:#9ca3af;text-transform:uppercase;text-align:left;'
+                        'background:#2d3139">' + c + '</th>')
+        return '<tr>' + ''.join(parts) + '</tr>\n'
+
+    html = []
+    html.append('<!DOCTYPE html>\n<html><head><meta charset="UTF-8"><title>WebLogic Health Report</title></head>\n')
+    html.append('<body style="margin:0;padding:0;background:#1a1d23;font-family:Arial,Helvetica,sans-serif;color:#e4e7eb">\n')
+    html.append('<table align="center" width="100%" cellpadding="0" cellspacing="0" style="max-width:700px;background:#1a1d23">\n')
+
+    html.append('<tr><td style="padding:30px 20px 10px">\n'
+        '<table width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid #2d3139;padding-bottom:12px">\n'
+        '<tr>\n'
+        '<td style="font-size:20px;font-weight:700;color:#8b5cf6">WebLogic Domain Report</td>\n'
+        '<td style="text-align:right;font-size:12px;color:#9ca3af">\n'
+        '<div style="color:#e4e7eb;font-weight:600">' + hostname + '</div>\n'
+        '<div>' + now + '</div>\n'
+        '</td>\n</tr>\n</table>\n</td></tr>\n')
+
+    d = data['domain']
+    sv = data['servers']
+    up = len([1 for s in sv if s['state'] == 'RUNNING'])
+    nm_ok = data.get('nm') == 'Running'
+
+    html.append('<tr><td style="padding:16px 20px 4px">\n'
+        '<table width="100%" cellpadding="0" cellspacing="0">\n<tr>\n'
+        '<td style="width:25%;padding:8px;text-align:center;background:#22262e;border-radius:6px">\n'
+        '<div style="font-size:22px;font-weight:700;color:#e4e7eb">' + str(len(sv)) + '</div>\n'
+        '<div style="font-size:11px;color:#9ca3af">Servers</div>\n</td>\n'
+        '<td style="width:25%;padding:8px;text-align:center;background:#22262e;border-radius:6px">\n'
+        '<div style="font-size:22px;font-weight:700;color:#2ecc71">' + str(up) + '</div>\n'
+        '<div style="font-size:11px;color:#9ca3af">Running</div>\n</td>\n'
+        '<td style="width:25%;padding:8px;text-align:center;background:#22262e;border-radius:6px">\n'
+        '<div style="font-size:22px;font-weight:700;color:#e4e7eb">' + str(len(data['deployments'])) + '</div>\n'
+        '<div style="font-size:11px;color:#9ca3af">Deployments</div>\n</td>\n'
+        '<td style="width:25%;padding:8px;text-align:center;background:#22262e;border-radius:6px">\n'
+        '<div style="font-size:22px;font-weight:700;color:#f1c40f">' + str(len(data['datasources'])) + '</div>\n'
+        '<div style="font-size:11px;color:#9ca3af">Datasources</div>\n</td>\n'
+        '</tr>\n</table>\n</td></tr>\n')
+
+    if nm_ok:
+        nm_badge = badge('Running', '#2ecc71')
+    else:
+        nm_badge = badge('Down', '#e74c3c')
+    html.append('<tr><td style="padding:4px 20px 14px;font-size:12px;color:#9ca3af">\n'
+        'Domain: ' + d['name'] + ' &nbsp;|&nbsp; Version: ' + d['version']
+        + ' &nbsp;|&nbsp; Node Manager: ' + nm_badge + '</td></tr>\n')
+
+    if data.get('clusters'):
+        cnames = []
+        for c in data['clusters']:
+            cnames.append(c['name'])
+        html.append('<tr><td style="padding:0 20px 10px;font-size:12px;color:#9ca3af">'
+            'Clusters: ' + ', '.join(cnames) + '</td></tr>\n')
+
+    html.append('<tr><td style="padding:4px 20px">\n'
+        '<table width="100%" cellpadding="0" cellspacing="0" style="background:#22262e;border-radius:6px;overflow:hidden">\n')
+    html.append(th(['Server', 'State', 'Health', 'Free Heap']))
+    for s in sv:
+        sn = s['state'].lower()
+        sb = badge(s['state'], STATE_COLORS.get(sn, '#95a5a6'))
+        hb = badge(s['health_label'], s['health_color'])
+        hp = s['heap_free_pct']
+        if hp < 0:
+            hc = '<span style="color:#6b7280;font-style:italic">N/A</span>'
+        elif hp < 20:
+            hc = badge(str(round(hp, 1)) + '%', '#e74c3c')
+        elif hp < 40:
+            hc = badge(str(round(hp, 1)) + '%', '#f1c40f')
+        else:
+            hc = badge(str(round(hp, 1)) + '%', '#2ecc71')
+        html.append(td([s['name'], sb, hb, hc]))
+    html.append('</table>\n</td></tr>\n')
+
+    if data['deployments']:
+        html.append('<tr><td style="padding:16px 20px 4px;font-size:14px;font-weight:600">'
+            'Deployments</td></tr>\n')
+        html.append('<tr><td style="padding:4px 20px">\n'
+            '<table width="100%" cellpadding="0" cellspacing="0" style="background:#22262e;border-radius:6px;overflow:hidden">\n')
+        html.append(th(['Application', 'State']))
+        for a in data['deployments']:
+            as_ = a['state'].lower()
+            if as_ in ('active', 'prepared'):
+                ab = badge(a['state'], '#2ecc71')
+            elif as_ == 'failed':
+                ab = badge(a['state'], '#e74c3c')
+            else:
+                ab = badge(a['state'], '#f1c40f')
+            html.append(td([a['name'], ab]))
+        html.append('</table>\n</td></tr>\n')
+
+    if data['datasources']:
+        html.append('<tr><td style="padding:16px 20px 4px;font-size:14px;font-weight:600">'
+            'Datasources</td></tr>\n')
+        html.append('<tr><td style="padding:4px 20px">\n'
+            '<table width="100%" cellpadding="0" cellspacing="0" style="background:#22262e;border-radius:6px;overflow:hidden">\n')
+        html.append(th(['Name', 'Max Connections']))
+        for ds in data['datasources']:
+            if ds['max'] > 0:
+                c = str(ds['max'])
+            else:
+                c = 'N/A'
+            html.append(td([ds['name'], c]))
+        html.append('</table>\n</td></tr>\n')
+
+    html.append('<tr><td style="padding:20px;text-align:center;font-size:11px;color:#6b7280">'
+        'Generated by WLST &ndash; WebLogic Health Monitor</td></tr>\n')
+    html.append('</table>\n</body></html>\n')
+    return ''.join(html)
+
+# ---------------------------------------------------------------------------
+# Email
+# ---------------------------------------------------------------------------
 
 def send_email(html_body, subject=None):
-    """Send the HTML report via SMTP using javax.mail (Jython-safe)."""
-    from time import strftime as fmt_time
-
     if not SMTP_USER or not SMTP_PASS:
-        print 'WARN: SMTP not configured - skipping email. Set WL_SMTP_USER and WL_SMTP_PASS in .env'
+        print '  SMTP not configured - skipping.'
         return False
 
+    from time import strftime as _f
     if subject is None:
-        subject = 'WebLogic Health Report - ' + fmt_time('%Y-%m-%d %H:%M')
+        subject = 'WebLogic Health Report - ' + _f('%Y-%m-%d %H:%M')
 
     from javax.mail import Session, Message
     from javax.mail.internet import MimeMessage, InternetAddress, MimeMultipart, MimeBodyPart
@@ -315,95 +423,99 @@ def send_email(html_body, subject=None):
         msg.addRecipient(Message.RecipientType.TO, InternetAddress(to))
     msg.setSubject(subject)
 
-    multipart = MimeMultipart('alternative')
-    htmlPart = MimeBodyPart()
-    htmlPart.setContent(html_body, 'text/html; charset=utf-8')
-    multipart.addBodyPart(htmlPart)
-    msg.setContent(multipart)
+    mp = MimeMultipart('alternative')
+    hp_ = MimeBodyPart()
+    hp_.setContent(html_body, 'text/html; charset=utf-8')
+    mp.addBodyPart(hp_)
+    msg.setContent(mp)
 
-    print '  Connecting to SMTP %s:%s ...' % (SMTP_HOST, SMTP_PORT)
+    print '  SMTP %s:%s ...' % (SMTP_HOST, SMTP_PORT)
     try:
-        transport = session.getTransport('smtp')
-        transport.connect(SMTP_HOST, SMTP_USER, SMTP_PASS)
-        transport.sendMessage(msg, msg.getAllRecipients())
-        transport.close()
-        print 'OK: Email sent to ' + ', '.join(EMAIL_TO)
+        t = session.getTransport('smtp')
+        t.connect(SMTP_HOST, SMTP_USER, SMTP_PASS)
+        t.sendMessage(msg, msg.getAllRecipients())
+        t.close()
+        print '  Email sent to ' + ', '.join(EMAIL_TO)
         return True
     except Exception, e:
-        print 'ERROR: Failed to send email - ' + str(e)
+        print '  ERROR: ' + str(e)
         return False
 
-
 # ---------------------------------------------------------------------------
-# Daemon loop
+# Run cycle
 # ---------------------------------------------------------------------------
-INTERVAL_SECONDS = 7200  # 2 hours
 
 def run_once():
-    from time import strftime as fmt_time
-    now = fmt_time('%Y-%m-%d %H:%M:%S')
+    now = sf()
     hostname = socket.gethostname()
     print ''
     print '=' * 60
-    print ' WebLogic Health Monitor'
+    print ' WebLogic Domain Health Check'
     print ' Target : %s' % ADMIN_URL
     print ' Host   : %s' % hostname
     print ' Time   : %s' % now
     print '=' * 60
 
-    metrics = collect_metrics()
+    data = collect_domain_health()
 
-    if not metrics:
-        print 'ERROR: No server metrics collected.'
+    if not data.get('servers'):
+        print 'ERROR: No servers found.'
         return
 
-    print ''
-    print '%-24s %-12s %-10s %s' % ('Server', 'State', 'Health', 'FreeHeap%')
-    print '-' * 60
-    for m in metrics:
-        if m['heap_free_pct'] >= 0:
-            heap_str = '%.1f%%' % m['heap_free_pct']
+    section('Summary')
+    for s in data['servers']:
+        if s['heap_free_pct'] >= 0:
+            hp = '%.1f%%' % s['heap_free_pct']
         else:
-            heap_str = 'N/A'
-        print '%-24s %-12s %-10s %s' % (
-            m['name'], m['state'], m['health_label'], heap_str)
-    print '-' * 60
+            hp = 'N/A'
+        print '  %-24s %-10s %-10s %s' % (s['name'], s['state'], s['health_label'], hp)
 
-    html = build_html(metrics, hostname)
+    html = build_html_report(data, hostname)
 
-    report_dir = os.environ.get('TEMP', '/tmp')
-    report_path = os.path.join(report_dir, 'weblogic_report_%s.html' % fmt_time('%Y%m%d_%H%M'))
+    rdir = os.environ.get('TEMP', '/tmp')
+    rpath = os.path.join(rdir, 'weblogic_report_%s.html' % sf('%Y%m%d_%H%M'))
     try:
-        f = open(report_path, 'w')
+        f = open(rpath, 'w')
         f.write(html.encode('utf-8'))
         f.close()
-        print 'OK: Report saved to %s' % report_path
+        section('Report')
+        print '  Saved: %s' % rpath
     except Exception, e:
-        print 'WARN: Could not write report file - %s' % str(e)
+        pass
 
+    section('Email')
     send_email(html)
 
-    print '[%s] Done.' % now
-
+# ---------------------------------------------------------------------------
+# Entry
+# ---------------------------------------------------------------------------
 
 if len(sys.argv) > 1 and sys.argv[1] == '--once':
     run_once()
 else:
-    from time import strftime as fmt_time, sleep as _sleep
+    from time import strftime as _tf, sleep as slp
+    interval = CHECK_INTERVAL
+    for i, a in enumerate(sys.argv):
+        if a == '--interval' and i + 1 < len(sys.argv):
+            try:
+                interval = int(sys.argv[i + 1])
+            except ValueError:
+                pass
 
     print 'WebLogic Health Monitor - Daemon Mode'
-    print 'Interval: every %d seconds (%d hours)' % (INTERVAL_SECONDS, INTERVAL_SECONDS / 3600)
+    print 'Interval: every %d seconds (%d hours, %d minutes)' % (
+        interval, interval / 3600, (interval % 3600) / 60)
     print 'Press Ctrl+C to stop.'
     print ''
 
     try:
         while True:
             run_once()
-            next_run = fmt_time('%Y-%m-%d %H:%M:%S')
+            nx = _tf('%Y-%m-%d %H:%M:%S')
             print ''
-            print 'Next check at %s (waiting %d minutes)...' % (next_run, INTERVAL_SECONDS / 60)
+            print 'Next check at %s (waiting %d minutes)...' % (nx, interval / 60)
             print 'Press Ctrl+C to stop.'
-            _sleep(INTERVAL_SECONDS)
+            slp(interval)
     except KeyboardInterrupt:
         print ''
         print 'Stopped by user.'
