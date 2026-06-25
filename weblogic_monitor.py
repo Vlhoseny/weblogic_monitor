@@ -560,7 +560,7 @@ def send_email(subject, body):
 def save_report(html):
     from time import strftime as fmt_time
     fname = 'weblogic_report_' + fmt_time('%Y%m%d_%H%M') + '.html'
-    fpath = os.path.join(os.environ.get('TEMP', os.environ.get('TMP', '/tmp')), fname)
+    fpath = os.path.join(os.environ.get('TEMP', os.environ.get('TMP', os.environ.get('TMPDIR', '/tmp'))), fname)
     f = open(fpath, 'w')
     f.write(html.encode('utf-8'))
     f.close()

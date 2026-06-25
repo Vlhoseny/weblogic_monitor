@@ -19,10 +19,13 @@ fi
 if [ -z "$WLST" ]; then
     for dir in \
         "$HOME/Oracle/Middleware/Oracle_Home" \
+        "$HOME/Oracle" \
         "/opt/oracle/middleware" \
         "/u01/app/oracle/middleware" \
         "/app/oracle/product" \
-        "/opt/oracle/product"; do
+        "/opt/oracle/product" \
+        "/Applications/Oracle/Middleware/Oracle_Home" \
+        "/Applications/Oracle"; do
         if [ -f "$dir/oracle_common/common/bin/wlst.sh" ]; then
             WLST="$dir/oracle_common/common/bin/wlst.sh"
             break
