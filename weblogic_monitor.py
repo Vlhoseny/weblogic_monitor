@@ -306,7 +306,7 @@ def build_html_report(data):
     # Header
     from time import strftime as fmt_time
     ts = fmt_time('%Y-%m-%d %H:%M:%S')
-    host = os.environ.get('COMPUTERNAME', 'localhost')
+    host = os.environ.get('COMPUTERNAME') or os.environ.get('HOSTNAME', 'localhost')
     sv_count = len(data)
     up_count = 0
     for s in data:
@@ -572,7 +572,7 @@ def save_report(html):
 # ---------------------------------------------------------------------------
 def run_once():
     from time import strftime as fmt_time
-    host = os.environ.get('COMPUTERNAME', 'localhost')
+    host = os.environ.get('COMPUTERNAME') or os.environ.get('HOSTNAME', 'localhost')
     print ''
     print '============================================================'
     print ' WebLogic Domain Health Check'
