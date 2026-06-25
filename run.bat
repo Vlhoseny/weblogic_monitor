@@ -49,14 +49,18 @@ if not defined WLST (
 echo [OK] Found WLST: %WLST%
 echo.
 
+REM --- Run ----------------------------------------------------------
+set USER_MEM_ARGS=-Xms256m -Xmx1024m
+set WL_SCRIPT_DIR=%~dp0
+
 REM --- Check .env ---------------------------------------------------
-if not exist ".env" (
+if not exist "%WL_SCRIPT_DIR%.env" (
     echo [INFO] No .env file found. Creating from .env.example ...
-    if exist ".env.example" (
-        copy .env.example .env >nul
+    if exist "%WL_SCRIPT_DIR%.env.example" (
+        copy "%WL_SCRIPT_DIR%.env.example" "%WL_SCRIPT_DIR%.env" >nul
         echo.
         echo [ACTION REQUIRED] Edit .env with your credentials:
-        echo    notepad .env
+        echo    notepad "%WL_SCRIPT_DIR%.env"
         echo.
         pause
         exit /b 1
@@ -67,13 +71,10 @@ if not exist ".env" (
     )
 )
 
-REM --- Run ----------------------------------------------------------
-set USER_MEM_ARGS=-Xms256m -Xmx1024m
-set WL_SCRIPT_DIR=%~dp0
 echo [OK] Starting WLST ...
 echo.
 
-"%WLST%" "%~dp0weblogic_monitor.py"
+"%WLST%" "%WL_SCRIPT_DIR%weblogic_monitor.py" %*
 
 echo.
 echo ============================================
