@@ -192,6 +192,49 @@ def collect_jms_metrics(server):
                         'name': jn,
                         'messages_cur': safe_get(cmo, 'getMessagesCurrentCount', -1),
                         'messages_pending': safe_get(cmo, 'getMessagesPendingCount', -1),
+                        'destinations': collect_jms_destinations(server, jn),
+                    })
+                except:
+                    pass
+    except:
+        pass
+    return results
+
+def collect_jms_destinations(server, jms_name):
+    results = []
+    try:
+        cd('/ServerRuntimes/' + server + '/JMSRuntime/' + server + '.jms/JMSServers/' + jms_name + '/Destinations')
+        dest_list = ls(returnMap='true')
+        if dest_list:
+            for d in dest_list:
+                try:
+                    cd('/ServerRuntimes/' + server + '/JMSRuntime/' + server + '.jms/JMSServers/' + jms_name + '/Destinations/' + d)
+                    results.append({
+                        'name': d,
+                        'messages_cur': safe_get(cmo, 'getMessagesCurrentCount', -1),
+                        'messages_pending': safe_get(cmo, 'getMessagesPendingCount', -1),
+                        'consumers': safe_get(cmo, 'getConsumersCurrentCount', -1),
+                    })
+                except:
+                    pass
+    except:
+        pass
+    return results
+
+def collect_saf_agents(server):
+    results = []
+    try:
+        cd('/ServerRuntimes/' + server + '/SAFRuntime/' + server + '.saf/Agents')
+        agent_list = ls(returnMap='true')
+        if agent_list:
+            for a in agent_list:
+                try:
+                    cd('/ServerRuntimes/' + server + '/SAFRuntime/' + server + '.saf/Agents/' + a)
+                    results.append({
+                        'name': a,
+                        'state': safe_get(cmo, 'getState', 'unknown'),
+                        'messages_cur': safe_get(cmo, 'getMessagesCurrentCount', -1),
+                        'failed_total': safe_get(cmo, 'getFailedMessagesTotalCount', -1),
                     })
                 except:
                     pass
@@ -220,6 +263,7 @@ def collect_all_servers():
         server['threads'] = collect_thread_pool(sv)
         server['jdbc'] = collect_jdbc_metrics(sv)
         server['jms'] = collect_jms_metrics(sv)
+        server['saf'] = collect_saf_agents(sv)
         results.append(server)
     return results
 
@@ -422,6 +466,42 @@ def build_html_report(data):
                 html.append(dcell(str(jms.get('messages_cur', 'N/A'))))
                 html.append(dcell(str(jms.get('messages_pending', 'N/A'))))
                 html.append('</tr>\n')
+                dests = jms.get('destinations', [])
+                if dests:
+                    html.append('<tr><td colspan="3" style="padding:0 8px 6px 28px">\n')
+                    html.append('<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:4px;overflow:hidden;font-size:11px">\n')
+                    html.append('<tr>' + hcell('Destination','#f1f5f9') + hcell('Cur','#f1f5f9') + hcell('Pending','#f1f5f9') + hcell('Con','#f1f5f9') + '</tr>\n')
+                    for d in dests:
+                        dn = d['name']
+                        if len(dn) > 40:
+                            dn = dn[:38] + '..'
+                        html.append('<tr>')
+                        html.append(dcell(dn))
+                        html.append(dcell(str(d.get('messages_cur', 'N/A'))))
+                        html.append(dcell(str(d.get('messages_pending', 'N/A'))))
+                        html.append(dcell(str(d.get('consumers', 'N/A'))))
+                        html.append('</tr>\n')
+                    html.append('</table>\n')
+                    html.append('</td></tr>\n')
+            html.append('</table>\n')
+            html.append('</td></tr>\n')
+
+        # SAF agents
+        saf_list = s.get('saf', [])
+        if saf_list:
+            html.append('<tr><td style="padding:12px 28px 4px">\n')
+            html.append('<div style="font-size:13px;font-weight:700;color:#1e293b">SAF Agents</div>\n')
+            html.append('</td></tr>\n')
+            html.append('<tr><td style="padding:0 28px 4px">\n')
+            html.append('<table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:6px;overflow:hidden">\n')
+            html.append('<tr>' + hcell('Name') + hcell('State') + hcell('Current Msgs') + hcell('Failed Total') + '</tr>\n')
+            for saf in saf_list:
+                html.append('<tr>')
+                html.append(dcell(saf['name']))
+                html.append(dcell(str(saf.get('state', 'N/A'))))
+                html.append(dcell(str(saf.get('messages_cur', 'N/A'))))
+                html.append(dcell(str(saf.get('failed_total', 'N/A'))))
+                html.append('</tr>\n')
             html.append('</table>\n')
             html.append('</td></tr>\n')
 
@@ -537,6 +617,10 @@ def run_once():
             print '    DS ' + ds['name'] + ': active=' + str(ds.get('active', '?')) + ' leaked=' + str(ds.get('leaked', '?'))
         for jms in s.get('jms', []):
             print '    JMS ' + jms['name'] + ': cur=' + str(jms.get('messages_cur', '?')) + ' pending=' + str(jms.get('messages_pending', '?'))
+            for d in jms.get('destinations', []):
+                print '      DEST ' + d['name'] + ': cur=' + str(d.get('messages_cur', '?')) + ' pending=' + str(d.get('messages_pending', '?')) + ' consumers=' + str(d.get('consumers', '?'))
+        for saf in s.get('saf', []):
+            print '    SAF ' + saf['name'] + ': ' + str(saf.get('state', '?')) + ' cur=' + str(saf.get('messages_cur', '?')) + ' failed=' + str(saf.get('failed_total', '?'))
 
     disconnect()
 
